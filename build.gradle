@@ -1,0 +1,189 @@
+import groovy.io.FileType
+import java.nio.file.Files
+import java.nio.file.Paths
+
+defaultTasks 'Compare'
+
+ext{
+buildDir = "$buildDir"
+SrcinboundDirPath = "$buildDir/Extracted/$Sourcefix/IntegrationServer/replicate/inbound"
+DestinboundDirPath = "$buildDir/Extracted/$Destfix/IntegrationServer/replicate/inbound"
+}
+
+String.metaClass.executeWindowsCommand = { ignoreCmdStatus=false, cmdExecDirectory=null, stream=null ->
+	executeCmd(delegate, null, ignoreCmdStatus, cmdExecDirectory, stream)
+}
+
+ArrayList.metaClass.executeWindowsCommand = {ignoreCmdStatus=false, cmdExecDirectory=null, stream=null ->
+	executeCmd(delegate, null, ignoreCmdStatus, cmdExecDirectory, stream)
+}
+def executeCmd(windowsCmd, linuxCmd, ignoreCmdStatus, cmdExecDirectory, stream) {
+
+	def cmd
+	cmd = [["cmd", "/S", "/C"] << windowsCmd].flatten()
+	if (cmd != null) {
+		println 'Executing: ' + cmd.join(' ') + ' command'
+		project.exec {
+			commandLine = cmd
+
+			if(ignoreCmdStatus) {
+				ignoreExitValue = ignoreCmdStatus
+			}
+			if (cmdExecDirectory) {
+				workingDir = cmdExecDirectory
+			}
+
+			if (stream) {
+				standardOutput = stream
+			}
+		}
+	}
+}
+
+
+def downloadSrcFix(){
+
+	def target = file("${buildDir}/FixRepo/${Sourcefix}")
+
+	String[] fix = "${Sourcefix}".split('_')
+	def fixName = fix[0]
+	def fixVersion = fix[1]
+	
+	def source = "http://repo:repo@aquarius-va.ame.ad.sag:8088/reposervice/repoadmin/downloadfix?fixVersion=${fixVersion}&fixName=${fixName}&repoName=${SrcRepo}&viewWhat=readme"
+	ant.get(src: source, dest: target, username: 'repo', password:'repo' )
+
+}
+def downloadDestFix(){
+
+	def target = file("${buildDir}/FixRepo/${Destfix}")
+	
+	String[] fix = "${Destfix}".split('_')
+	def fixName = fix[0]
+	def fixVersion = fix[1]
+	
+	def source = "http://repo:repo@aquarius-va.ame.ad.sag:8088/reposervice/repoadmin/downloadfix?fixVersion=${fixVersion}&fixName=${fixName}&repoName=${DestRepo}&viewWhat=readme"
+	 ant.get(src: source , dest: target, username: 'repo', password:'repo' )
+	
+}
+
+def unpackFilesSource() {
+
+   // from zipTree("${buildDir}/../FixRepo/${Sourcefix}")
+    //into "./Extracted/${Sourcefix}"
+	
+	unZipTask("${buildDir}/FixRepo/${Sourcefix}","${buildDir}/Extracted/${Sourcefix}" )
+}
+
+def unpackFilesDest() {
+	
+	//from zipTree("${buildDir}/../FixRepo/${Destfix}")
+    //into "${buildDir}/../Extracted/${Destfix}"
+	unZipTask("${buildDir}/FixRepo/${Destfix}","${buildDir}/Extracted/${Destfix}" )
+}
+
+def UnpackInboundFilesDest(){
+
+	File inboundfolder = new File("${DestinboundDirPath}")
+	
+	inboundfolder.eachFileRecurse FileType.FILES, {file ->
+		if(file.name.endsWith(".zip")){
+		//println "${file.absolutePath}"
+		
+		def name = file.name - "_Fix${DestFixNum}.zip"
+		println "$name"
+		//from zipTree("$inboundfolder/${file.name}")
+		//into "$inboundfolder/${name}"  	
+		//}
+		unZipTask("$inboundfolder/${file.name}","$inboundfolder/${name}" )
+		}
+	}	
+}
+
+
+
+def CopyTask(SrcFolder, DestFolder){
+	Files.copy(Paths.get(SrcFolder), Paths.get(DestFolder))
+}
+
+def RenameTask(SrcFolder, DestFolder){
+	File f1 = new File(SrcFolder)
+	File f2 = new File(DestFolder)
+	
+	boolean b = f1.renameTo(f2)
+}
+
+task rename(){
+   doLast{
+   
+   RenameTask("$buildDir/Extracted/${Sourcefix}/IntegrationServer/updateReadmes/*.txt", "$buildDir/Extracted/${Sourcefix}/IntegrationServer/updateReadmes/RenamedReadmeSource.txt" , Source)
+   }
+}
+def unZipTask(SrcFolder, DestFolder){
+println "Src : $SrcFolder, Dest: $DestFolder"
+	ant.unzip(src: SrcFolder , 
+			  dest: DestFolder, 
+			  overwrite:"false" )
+}
+
+
+def UnpackInboundFilesSrc(){
+
+	File inboundfolder = new File("${SrcinboundDirPath}")
+	inboundfolder.eachFileRecurse FileType.FILES, {file ->
+		if(file.name.endsWith(".zip")){
+		//println "${file.absolutePath}"
+		//copy {
+		def name = file.name - "_Fix${SourceFixNum}.zip"
+		println "$name"
+		unZipTask("$inboundfolder/${file.name}","$inboundfolder/${name}" )
+		//}
+		
+		}
+	}	
+}
+
+
+task deletezipfiles(type : Delete){
+	delete fileTree("${SrcinboundDirPath}").matching {
+		include '*.zip' }
+	delete fileTree("${DestinboundDirPath}").matching {
+		include '*.zip' }
+}
+
+
+def getDate(){
+ def date = new Date()
+ def formattedDate = date.format('dd_MM_yyyy')
+ return formattedDate
+}
+
+
+def openwinMerge(){
+    //open winmerge and show the results
+	def winmergelocation = "$winmergelocation"
+	
+	//def winmergeCommand = "WinMergeU.exe /r ${buildDir}/Extracted/${Sourcefix}/ ${buildDir}/Extracted/${Destfix}/"
+	//winmergeCommand.executeWindowsCommand(false, winmergelocation)
+	
+	//to generate the comparision report in simple html format 
+	def formattedDate = getDate()
+	def ahklocation = "${buildDir}"
+	def ahkcommand = "${buildDir}/MYWinMergeScript.exe $winmergelocation/WinMergeU.exe ${buildDir}/Extracted/${Sourcefix}/ ${buildDir}/Extracted/${Destfix}/ ${buildDir}/WinMergeReports/ComparisionReport_${formattedDate}.html"
+	ahkcommand.executeWindowsCommand(false, ahklocation)
+	
+}
+
+
+task Compare(){
+doLast{
+	downloadSrcFix()
+	downloadDestFix()
+	unpackFilesSource()
+	unpackFilesDest()
+	UnpackInboundFilesDest()
+	UnpackInboundFilesSrc()
+	tasks.deletezipfiles.execute()
+	openwinMerge()
+	
+	}
+}
